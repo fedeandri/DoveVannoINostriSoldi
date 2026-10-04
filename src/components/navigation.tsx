@@ -25,7 +25,7 @@ import {
   isNavSectionActive,
   type NavLink,
 } from "@/lib/site-navigation";
-import { REPO_URL } from "@/lib/site";
+import { REPO_URL, SOURCE_URL } from "@/lib/site";
 
 const NAV_ICONS = {
   home: Home01Icon,
@@ -296,6 +296,9 @@ function NavigationContent({ pathname, currentSearch, announcements }: Navigatio
             <a className="header-action header-action-icon" href={REPO_URL} target="_blank" rel="noreferrer"
               aria-label="Codice su GitHub, si apre in una nuova scheda" title="Codice su GitHub">
               <HugeiconsIcon icon={GithubIcon} size={19} strokeWidth={1.7} aria-hidden="true" />
+            </a>
+            <a className="header-action" href={SOURCE_URL} title="Codice sorgente di questa versione (AGPL)">
+              Sorgente
             </a>
           </div>
         </div>

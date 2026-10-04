@@ -5,6 +5,8 @@
  */
 
 export const REPO_URL = "https://github.com/Italian-Builders-Org/DoveVannoINostriSoldi";
+/** dvns-app fork: AGPL section 13 source offer for the version running on dvnstest.com. */
+export const SOURCE_URL = "/source.tar.gz";
 export const PUBLIC_SITE_URL = "https://www.dovevannoinostrisoldi.com";
 /** Immersive republic map; also reachable as `/politici` on the main host. */
 export const PUBLIC_POLITICI_URL = "https://politici.dovevannoinostrisoldi.com";

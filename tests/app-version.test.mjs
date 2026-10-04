@@ -11,9 +11,12 @@ const mcpServer = await import("node:fs/promises").then(({ readFile }) =>
 
 test("runtime metadata derives one version from package.json", () => {
   assert.equal(APP_VERSION, packageJson.version);
-  assert.match(APP_USER_AGENT, new RegExp(`DoveVannoINostriSoldi/${packageJson.version.replaceAll(".", "\\.")}`));
+  // dvns-app fork: the User-Agent names the dvnstest.com deployment and points at its source offer.
+  assert.match(APP_USER_AGENT, new RegExp(`DoveVannoINostriSoldi-dvnstest/${packageJson.version.replaceAll(".", "\\.")} \\(\\+https://dvnstest\\.com/source\\.tar\\.gz\\)`));
+  assert.doesNotMatch(APP_USER_AGENT, /Italian-Builders-Org/);
   assert.match(IPA_USER_AGENT, new RegExp(`OpenDataClient/${packageJson.version.replaceAll(".", "\\.")}`));
   assert.doesNotMatch(IPA_USER_AGENT, /DoveVannoINostriSoldi/);
+  assert.match(IPA_USER_AGENT, /\(dvnstest\.com\)/);
   assert.match(sourceFetch, /APP_USER_AGENT/);
   assert.match(sourceFetch, /IPA_USER_AGENT/);
   assert.doesNotMatch(sourceFetch, /DoveVannoINostriSoldi\/0\.5/);

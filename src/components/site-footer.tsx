@@ -11,7 +11,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { FOOTER_SITEMAP_GROUPS } from "@/lib/site-navigation";
-import { BUY_ME_A_COFFEE_URL, REPO_URL, SOCIAL_LINKS } from "@/lib/site";
+import { BUY_ME_A_COFFEE_URL, REPO_URL, SOCIAL_LINKS, SOURCE_URL } from "@/lib/site";
 import { SITE_SUPPORTERS } from "@/lib/supporters";
 
 function mantoVentureSupporter() {
@@ -61,6 +61,7 @@ export function SiteFooter() {
             <Link prefetch={false} href="/termini">Termini</Link>
             <Link prefetch={false} href="/supporto">Supporto</Link>
             <a href={REPO_URL} target="_blank" rel="noreferrer"><HugeiconsIcon icon={GithubIcon} size={16} aria-hidden="true" /> GitHub</a>
+            <a href={SOURCE_URL}>Codice sorgente di questa versione</a>
           </nav>
         </div>
       </div>
