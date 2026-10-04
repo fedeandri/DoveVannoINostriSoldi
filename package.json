@@ -63,6 +63,7 @@
     "@hugeicons/core-free-icons": "^4.3.4",
     "@hugeicons/react": "^1.1.10",
     "@modelcontextprotocol/server": "^2.0.0",
+    "better-sqlite3": "13.0.3",
     "mammoth": "1.12.3",
     "next": "16.3.6",
     "pdfjs-dist": "6.3.289",
@@ -75,6 +76,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
