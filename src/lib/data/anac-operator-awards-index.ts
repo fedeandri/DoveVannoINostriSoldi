@@ -5,6 +5,8 @@ import { closeSync, fstatSync, openSync, readFileSync, readSync } from "node:fs"
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { readAnacOperatorPage } from "@/lib/data/anac-operator-browse";
+import { dataBackend } from "@/lib/data/sqlite";
+import { sqliteOperatorSearchPage } from "@/lib/data/anac-operator-awards-index.sqlite";
 
 const DATASET = "anac-operator-awards-index" as const;
 const SOURCE_SPEC_PATH = "scripts/etl/specs/anac-operator-awards-index.source.json";
@@ -662,6 +664,12 @@ function loadSearchIndex(): readonly AnacOperatorSearchHit[] {
   return hits;
 }
 
+/** dvns-app fork (spec 11.3): the query-independent tail of upstream's operator search order. */
+export function compareOperatorTail(left: AnacOperatorSearchHit, right: AnacOperatorSearchHit): number {
+  if (right.awardCount !== left.awardCount) return right.awardCount - left.awardCount;
+  return left.name.localeCompare(right.name, "it");
+}
+
 export function searchAnacOperators(options?: {
   q?: string | string[];
   limit?: number;
@@ -677,6 +685,18 @@ export function searchAnacOperators(options?: {
   if (normalizedQuery.length < MIN_QUERY_LENGTH) {
     return { query: trimmed, normalizedQuery, hits: [], matched: 0, limit, meta };
   }
+  if (dataBackend() === "sqlite") {
+    // dvns-app fork: ranking and paging in SQL (spec 11.3). Math.trunc matches Array.slice's truncation below.
+    const page = sqliteOperatorSearchPage(normalizedQuery, Math.trunc(limit));
+    return {
+      query: trimmed,
+      normalizedQuery,
+      hits: page.lines.map((line) => assertAnacOperatorSearchHit(JSON.parse(line))),
+      matched: page.matched,
+      limit,
+      meta,
+    };
+  }
   const index = loadSearchIndex();
   const matches = index.filter((hit) => hit.searchKey.includes(normalizedQuery));
   const matchedHits: AnacOperatorSearchHit[] = [];
@@ -686,8 +706,7 @@ export function searchAnacOperators(options?: {
     const leftPrefix = left.searchKey.startsWith(normalizedQuery) ? 0 : 1;
     const rightPrefix = right.searchKey.startsWith(normalizedQuery) ? 0 : 1;
     if (leftPrefix !== rightPrefix) return leftPrefix - rightPrefix;
-    if (right.awardCount !== left.awardCount) return right.awardCount - left.awardCount;
-    return left.name.localeCompare(right.name, "it");
+    return compareOperatorTail(left, right);
   };
   for (let position = 0; position < matches.length; position += 1) {
     const hit = matches[position];

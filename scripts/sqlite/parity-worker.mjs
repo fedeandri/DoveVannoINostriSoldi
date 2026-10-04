@@ -6,7 +6,10 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const [corpusPath, outPath] = process.argv.slice(2);
-const corpus = JSON.parse(readFileSync(corpusPath, 'utf8'));
+// Corpus numbers JSON cannot hold travel as { $number: 'NaN' | 'Infinity' | '-Infinity' }.
+const corpus = JSON.parse(readFileSync(corpusPath, 'utf8'), (_key, value) =>
+  value && typeof value === 'object' && typeof value.$number === 'string' && Object.keys(value).length === 1
+    ? Number(value.$number) : value);
 async function call(mod, fn, input) {
   if (fn === 'walkSearch' || fn === 'walkFacts') {
     const target = fn === 'walkSearch' ? mod.searchMedicalDevices : mod.listMedicalDeviceFacts;
