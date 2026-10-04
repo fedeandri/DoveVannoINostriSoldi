@@ -4,10 +4,18 @@
 //   node scripts/sqlite/build-db.mjs --only=a,b  # the named converters only (--only= runs none)
 // Exit 0: written and checked. 1: an input failed verification or the integrity check failed.
 // 2: setup error (no .release-commit, unknown converter name).
-import Database from 'better-sqlite3';
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { InputError, sha256 } from './lib.mjs';
-import { CONVERTERS } from './converters/index.mjs';
+import { spawnSync } from 'node:child_process';
+// Converters import upstream's TypeScript (validators, comparators): re-run under the type-stripping flag
+// so every caller can keep invoking `node scripts/sqlite/build-db.mjs`.
+if (!process.execArgv.includes('--experimental-strip-types')) {
+  const child = spawnSync(process.execPath, ['--experimental-strip-types', ...process.argv.slice(1)], { stdio: 'inherit' });
+  process.exit(child.status ?? 2);
+}
+await import('../ci/register-source-alias.mjs');
+const { default: Database } = await import('better-sqlite3');
+const { existsSync, readFileSync, renameSync, rmSync, writeFileSync } = await import('node:fs');
+const { InputError, sha256 } = await import('./lib.mjs');
+const { CONVERTERS } = await import('./converters/index.mjs');
 
 const CONVERTER_VERSION = '1';
 const OUT = 'dvns.sqlite';

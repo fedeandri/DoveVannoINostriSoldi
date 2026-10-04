@@ -44,6 +44,15 @@ async function call(mod, fn, input) {
     const fact = detail.rows[0];
     return mod.searchMedicalDevices({ q: 'PROFEMUR PRESERVE', type: '1', year: String(fact.year), region: fact.region, company: fact.company });
   }
+  if (fn === 'cursorBeyond') {
+    // A well-formed cursor whose `next` is beyond the match count, built as nextCursor builds it.
+    const { canonicalJson, sha256Hex } = await import(pathToFileURL(resolve('src/lib/integrated-source-contract.ts')).href);
+    const meta = JSON.parse(readFileSync('src/data/generated/medical-device-spending-index/meta.json', 'utf8'));
+    const folded = mod.normalized(input.q.trim());
+    const filter = sha256Hex(canonicalJson({ company: null, q: folded, region: null, type: null, year: null }));
+    const cursor = Buffer.from(canonicalJson({ filter, next: 1_000_000, source: meta.sourceSpecSha256, v: 1 })).toString('base64url');
+    return mod.searchMedicalDevices({ q: input.q, cursor });
+  }
   return mod[fn](input);
 }
 

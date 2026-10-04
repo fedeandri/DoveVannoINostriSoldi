@@ -4,6 +4,8 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } f
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 
 const root = process.cwd();
 const INDEX = 'src/data/generated/medical-device-spending-index';
@@ -48,3 +50,23 @@ for (const [file, offsetFrom] of [
     rmSync(dir, { recursive: true });
   });
 }
+
+test('medical converter refuses a search line upstream would reject', () => {
+  const dir = release();
+  const meta = JSON.parse(readFileSync(join(dir, INDEX, 'meta.json'), 'utf8'));
+  const lines = gunzipSync(readFileSync(join(dir, INDEX, 'search.jsonl.gz'))).toString('utf8').split('\n');
+  const first = JSON.parse(lines[0]);
+  first.number = 'not-a-number';
+  lines[0] = JSON.stringify(first);
+  const raw = Buffer.from(lines.join('\n'));
+  const gz = gzipSync(raw);
+  writeFileSync(join(dir, INDEX, 'search.jsonl.gz'), gz);
+  meta.search.bytes = gz.length;
+  meta.search.rawBytes = raw.length;
+  meta.search.sha256 = createHash('sha256').update(gz).digest('hex');
+  writeFileSync(join(dir, INDEX, 'meta.json'), JSON.stringify(meta));
+  const run = convert(dir);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /input file failed verification: .*search\.jsonl\.gz: line 1/);
+  rmSync(dir, { recursive: true });
+});

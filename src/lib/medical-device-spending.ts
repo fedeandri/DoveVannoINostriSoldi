@@ -7,7 +7,7 @@ import { setImmediate } from "node:timers/promises";
 import { gunzipSync } from "node:zlib";
 import { canonicalJson, sha256Hex } from "@/lib/integrated-source-contract";
 import { dataBackend } from "@/lib/data/sqlite";
-import { sqliteMedicalBlock, sqliteMedicalSearchLines } from "@/lib/medical-device-spending.sqlite";
+import { sqliteMedicalBlock, sqliteMedicalExactNumberTypes, sqliteMedicalSearchCount, sqliteMedicalSearchPage } from "@/lib/medical-device-spending.sqlite";
 
 const ROOT = "src/data/generated/medical-device-spending-index";
 const META_PATH = join(ROOT, "meta.json");
@@ -99,7 +99,7 @@ type Scope = Block & Readonly<{
   companyName: string | null;
   companyNames?: readonly string[];
 }>;
-type SearchCandidate = Pick<MedicalDeviceSearchHit, "schemaVersion" | "ref" | "type" | "number" | "searchKey" | "scopes" | "years">;
+export type SearchCandidate = Pick<MedicalDeviceSearchHit, "schemaVersion" | "ref" | "type" | "number" | "searchKey" | "scopes" | "years">;
 type Meta = Readonly<{
   schemaVersion: 1;
   dataset: "salute-spesa-dispositivi-index";
@@ -318,7 +318,7 @@ function loadMeta(): Meta {
   return meta;
 }
 
-function validateSearchCandidate(value: unknown): SearchCandidate {
+export function validateSearchCandidate(value: unknown): SearchCandidate {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Record ricerca non valido");
   const row = record(value, "search");
   if (row.schemaVersion !== 1 || typeof row.ref !== "string" || !DEVICE_REF.test(row.ref)
@@ -375,7 +375,7 @@ function readBlock(path: string, totalBytes: number, block: Block): Buffer {
   }
 }
 
-function normalized(value: string): string {
+export function normalized(value: string): string {
   return value.normalize("NFKD").toUpperCase().replace(/[^0-9A-Z]+/g, "");
 }
 
@@ -398,8 +398,21 @@ function filterHash(value: object): string {
   return sha256Hex(canonicalJson(value));
 }
 
-function totalSpending(hit: SearchCandidate): bigint {
+export function totalSpending(hit: SearchCandidate): bigint {
   return Object.values(hit.years).reduce((sum, item) => sum + moneyCents(item.spending), BigInt(0));
+}
+
+/**
+ * dvns-app fork (spec 11.1, 11.2): the query-independent tail of upstream's search order, with each
+ * candidate's total computed once by the caller. The converter ranks every row with this same function.
+ */
+export function compareSearchTail(left: SearchCandidate, right: SearchCandidate,
+  totals: ReadonlyMap<SearchCandidate, bigint>): number {
+  const leftSpend = totals.get(left)!;
+  const rightSpend = totals.get(right)!;
+  return (leftSpend === rightSpend ? 0 : leftSpend > rightSpend ? -1 : 1)
+    || left.type.localeCompare(right.type) || left.number.localeCompare(right.number, "en", { numeric: true })
+    || left.ref.localeCompare(right.ref);
 }
 
 function moneyCents(value: string): bigint {
@@ -462,17 +475,6 @@ async function scanSearchCandidates(meta: Meta, folded: string, type: "1" | "2" 
     if (selectedScopeIds !== null && !hit.scopes.some((id) => selectedScopeIds.has(id))) return;
     if (hit.searchKey.includes(folded)) matches.push(hit);
   };
-  if (dataBackend() === "sqlite") {
-    const lines = sqliteMedicalSearchLines(folded);
-    for (let index = 0; index < lines.length; index += 1) {
-      if ((index & 4095) === 0) {
-        await setImmediate();
-        assertSignal(signal);
-      }
-      accept(lines[index]);
-    }
-    return matches;
-  }
   const raw = loadSearchBytes();
   let position = 0;
   let scanned = 0;
@@ -513,22 +515,42 @@ export async function searchMedicalDevices(input: Readonly<{
     ? new Set([meta.aggregates.scopes.indexOf(selectedScope)])
     : new Set(meta.aggregates.scopes.map((item, index) => item.year === year && item.region === region && item.company !== null ? index : -1).filter((index) => index >= 0));
   assertSignal(input.signal);
-  const matches = await scanSearchCandidates(meta, folded, type, year, selectedScopeIds, input.signal);
-  matches.sort((left, right) => {
-    const leftScore = normalized(left.number) === folded ? 0 : left.searchKey.startsWith(folded) ? 1 : 2;
-    const rightScore = normalized(right.number) === folded ? 0 : right.searchKey.startsWith(folded) ? 1 : 2;
-    if (leftScore !== rightScore) return leftScore - rightScore;
-    const leftSpend = totalSpending(left);
-    const rightSpend = totalSpending(right);
-    return (leftSpend === rightSpend ? 0 : leftSpend > rightSpend ? -1 : 1)
-      || left.type.localeCompare(right.type) || left.number.localeCompare(right.number, "en", { numeric: true }) || left.ref.localeCompare(right.ref);
-  });
   const filter = { company, q: folded, region, type, year };
   const hash = filterHash(filter);
-  const start = pageStart(input.cursor, hash, meta);
-  if (start > matches.length) throw new MedicalDeviceQueryError("cursor oltre i risultati disponibili.");
-  const size = limit(input.limit);
-  const candidates = matches.slice(start, start + size);
+  let candidates: SearchCandidate[];
+  let matchedCount: number;
+  let exactNumberTypes: Set<string>;
+  let start: number;
+  let size: number;
+  if (dataBackend() === "sqlite") {
+    // dvns-app fork: ranking and paging in SQL (spec 11.1). Same order of work and errors as the files branch.
+    await setImmediate();
+    assertSignal(input.signal);
+    const sqlFilter = { folded, type, year, scopeIds: selectedScopeIds === null ? null : [...selectedScopeIds] };
+    matchedCount = sqliteMedicalSearchCount(sqlFilter);
+    start = pageStart(input.cursor, hash, meta);
+    if (start > matchedCount) throw new MedicalDeviceQueryError("cursor oltre i risultati disponibili.");
+    size = limit(input.limit);
+    candidates = sqliteMedicalSearchPage(sqlFilter, start, size).map((line) => validateSearchCandidate(JSON.parse(line)));
+    exactNumberTypes = new Set(sqliteMedicalExactNumberTypes(sqlFilter, query));
+    await setImmediate();
+    assertSignal(input.signal);
+  } else {
+    const matches = await scanSearchCandidates(meta, folded, type, year, selectedScopeIds, input.signal);
+    const totals = new Map(matches.map((hit) => [hit, totalSpending(hit)]));   // dvns-app fork: spec 11.2
+    matches.sort((left, right) => {
+      const leftScore = normalized(left.number) === folded ? 0 : left.searchKey.startsWith(folded) ? 1 : 2;
+      const rightScore = normalized(right.number) === folded ? 0 : right.searchKey.startsWith(folded) ? 1 : 2;
+      if (leftScore !== rightScore) return leftScore - rightScore;
+      return compareSearchTail(left, right, totals);
+    });
+    matchedCount = matches.length;
+    start = pageStart(input.cursor, hash, meta);
+    if (start > matchedCount) throw new MedicalDeviceQueryError("cursor oltre i risultati disponibili.");
+    size = limit(input.limit);
+    candidates = matches.slice(start, start + size);
+    exactNumberTypes = new Set(matches.filter((hit) => hit.number === query).map((hit) => hit.type));
+  }
   const detailsByRef = new Map<string, Detail>();
   for (const prefix of new Set(candidates.map((candidate) => candidate.ref.slice(3, 5)))) {
     for (const detail of loadDetails(meta, prefix)) detailsByRef.set(detail.ref, detail);
@@ -542,10 +564,9 @@ export async function searchMedicalDevices(input: Readonly<{
       classificationLabel: detail.classificationLabel, searchKey: candidate.searchKey,
       scopes: candidate.scopes, years: candidate.years } satisfies MedicalDeviceSearchHit;
   });
-  const exactNumberTypes = new Set(matches.filter((hit) => hit.number === query).map((hit) => hit.type));
-  return { query, normalizedQuery: folded, filters: filter, hits, matched: matches.length,
+  return { query, normalizedQuery: folded, filters: filter, hits, matched: matchedCount,
     requiresType: type === null && exactNumberTypes.size > 1,
-    pagination: { limit: size, returned: hits.length, nextCursor: nextCursor(start + hits.length, matches.length, hash, meta), exhausted: start + hits.length >= matches.length },
+    pagination: { limit: size, returned: hits.length, nextCursor: nextCursor(start + hits.length, matchedCount, hash, meta), exhausted: start + hits.length >= matchedCount },
     provenance: { registrySnapshotDate: meta.registrySnapshotDate, sourceSpecSha256: meta.sourceSpecSha256,
       moneyNature: "spesa rilevata per dispositivi associati all’anagrafica BD/RDM; non incassi, prezzi unitari o fatturato" } } as const;
 }

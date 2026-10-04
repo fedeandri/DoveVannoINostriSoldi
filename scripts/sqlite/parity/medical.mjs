@@ -79,5 +79,18 @@ export function buildCases(db, random) {
       }
     }
   }
+  // Amendment 2: every SQL branch of spec 11.1.
+  for (const type of ['1', '2']) for (let i = 0; i < 20; i += 1) add('searchMedicalDevices', { q: substring(3), type });
+  for (let i = 0; i < 20; i += 1) add('searchMedicalDevices', { q: substring(3), year: String(years[i % years.length]) });
+  for (const year of years) {
+    const companyScopes = meta.aggregates.scopes.filter((s) => s.year === year && s.company !== null);
+    const scope = companyScopes[Math.floor(random() * companyScopes.length)];
+    if (scope) add('searchMedicalDevices', { q: substring(2), year: String(year), region: scope.region, company: scope.company });
+  }
+  const bothTypes = db.prepare('select number from medical_search group by number having count(distinct type) > 1 order by number limit 20').all();
+  for (const { number } of bothTypes) add('searchMedicalDevices', { q: number });
+  add('searchMedicalDevices', { q: 'PROTESI', cursor: 'not-a-cursor!!' });
+  for (let i = 0; i < 5; i += 1) add('cursorBeyond', { q: substring(3) });
+  for (const limit of ['0', '101', 'abc']) add('searchMedicalDevices', { q: 'PROTESI', limit });
   return cases;
 }
