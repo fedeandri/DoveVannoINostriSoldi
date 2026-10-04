@@ -7,13 +7,53 @@ import { pathToFileURL } from 'node:url';
 
 const [corpusPath, outPath] = process.argv.slice(2);
 const corpus = JSON.parse(readFileSync(corpusPath, 'utf8'));
+async function call(mod, fn, input) {
+  if (fn === 'walkSearch' || fn === 'walkFacts') {
+    const target = fn === 'walkSearch' ? mod.searchMedicalDevices : mod.listMedicalDeviceFacts;
+    const { pages, ...rest } = input;
+    const out = [];
+    let cursor;
+    for (let page = 0; page < pages; page += 1) {
+      const result = await target({ ...rest, cursor });
+      out.push(result);
+      cursor = result.pagination.nextCursor;
+      if (!cursor) break;
+    }
+    // Spec section 5: pages must join without gaps or duplicates. A broken join stops the worker
+    // (exit 3), so it fails the run even when both backends break the same way.
+    const ids = out.flatMap((page) => fn === 'walkSearch'
+      ? page.hits.map((hit) => hit.ref)
+      : page.rows.map((row) => `${row.datasetId}:${row.sourceRow}`));
+    if (new Set(ids).size !== ids.length) { console.error(`cursor walk ${JSON.stringify(input)}: duplicate rows`); process.exit(3); }
+    if (fn === 'walkSearch') {
+      const whole = await target({ ...rest, limit: String(Math.min(100, ids.length || 1)) });
+      const expected = whole.hits.map((hit) => hit.ref).slice(0, ids.length);
+      if (expected.join() !== ids.join()) { console.error(`cursor walk ${JSON.stringify(input)}: pages do not join`); process.exit(3); }
+    }
+    return out;
+  }
+  if (fn === 'firstBucketFacts') {
+    const aggregate = await mod.aggregateMedicalDeviceSpending({ ...input, limit: '1' });
+    const first = aggregate.rows[0];
+    if (!first) return null;
+    return mod.listMedicalDeviceAggregateFacts({ ...input, value: first.drilldown.value, role: first.drilldown.role, limit: '25' });
+  }
+  if (fn === 'profemurFiltered') {
+    // The filtered search of upstream's test: year, region and company come from a fact of device 1175175.
+    const detail = await mod.listMedicalDeviceFacts({ type: '1', number: '1175175', limit: 1 });
+    const fact = detail.rows[0];
+    return mod.searchMedicalDevices({ q: 'PROFEMUR PRESERVE', type: '1', year: String(fact.year), region: fact.region, company: fact.company });
+  }
+  return mod[fn](input);
+}
+
 const results = [];
 for (const group of corpus) {
   const mod = await import(pathToFileURL(resolve(group.modulePath)).href);
   for (const item of group.cases) {
     let outcome;
     try {
-      outcome = { value: await mod[item.fn](item.input) };
+      outcome = { value: await call(mod, item.fn, item.input) };
     } catch (error) {
       outcome = { error: { name: error?.name ?? 'Error', message: String(error?.message ?? error) } };
     }

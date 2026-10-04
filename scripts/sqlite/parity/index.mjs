@@ -1,2 +1,4 @@
-// Every module the parity harness compares (Tasks 5 and 7 add entries).
-export const PARITY_MODULES = [];
+// Every module the parity harness compares.
+import * as medical from './medical.mjs';
+
+export const PARITY_MODULES = [medical];

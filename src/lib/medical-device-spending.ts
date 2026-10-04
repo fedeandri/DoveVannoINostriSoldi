@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { gunzipSync } from "node:zlib";
 import { canonicalJson, sha256Hex } from "@/lib/integrated-source-contract";
+import { dataBackend } from "@/lib/data/sqlite";
+import { sqliteMedicalBlock, sqliteMedicalSearchLines } from "@/lib/medical-device-spending.sqlite";
 
 const ROOT = "src/data/generated/medical-device-spending-index";
 const META_PATH = join(ROOT, "meta.json");
@@ -347,6 +349,7 @@ function loadSearchBytes(): Buffer {
 }
 
 function readBlock(path: string, totalBytes: number, block: Block): Buffer {
+  if (dataBackend() === "sqlite") return sqliteMedicalBlock(path, block.key, block.rawBytes); // dvns-app fork
   if (block.rawBytes > MAX_BLOCK_OUTPUT || block.bytes <= 0 || block.offset + block.bytes > totalBytes) {
     throw new Error("Budget blocco indice non valido");
   }
@@ -444,6 +447,51 @@ function assertSignal(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Operazione annullata", "AbortError");
 }
 
+/**
+ * dvns-app fork: the search scan of searchMedicalDevices, split into a switched line source and
+ * upstream's unchanged acceptance code (spec section 4.1). The files branch is upstream's loop.
+ */
+async function scanSearchCandidates(meta: Meta, folded: string, type: "1" | "2" | null, year: number | null,
+  selectedScopeIds: Set<number> | null, signal?: AbortSignal): Promise<SearchCandidate[]> {
+  const matches: SearchCandidate[] = [];
+  const accept = (line: string): void => {
+    const hit = validateSearchCandidate(JSON.parse(line));
+    if (hit.scopes.some((id) => id >= meta.aggregates.scopes.length)) throw new Error("Scope ricerca fuori indice");
+    if (type !== null && hit.type !== type) return;
+    if (year !== null && hit.years[String(year)] === undefined) return;
+    if (selectedScopeIds !== null && !hit.scopes.some((id) => selectedScopeIds.has(id))) return;
+    if (hit.searchKey.includes(folded)) matches.push(hit);
+  };
+  if (dataBackend() === "sqlite") {
+    const lines = sqliteMedicalSearchLines(folded);
+    for (let index = 0; index < lines.length; index += 1) {
+      if ((index & 4095) === 0) {
+        await setImmediate();
+        assertSignal(signal);
+      }
+      accept(lines[index]);
+    }
+    return matches;
+  }
+  const raw = loadSearchBytes();
+  let position = 0;
+  let scanned = 0;
+  while (position < raw.length) {
+    const end = raw.indexOf(0x0a, position);
+    if (end < 0) throw new Error("Indice ricerca senza terminatore finale");
+    if ((scanned++ & 4095) === 0) {
+      await setImmediate();
+      assertSignal(signal);
+    }
+    const line = raw.toString("utf8", position, end);
+    position = end + 1;
+    if (!line.includes(folded)) continue;
+    accept(line);
+  }
+  if (scanned !== meta.search.records) throw new Error("Conteggio ricerca divergente");
+  return matches;
+}
+
 export async function searchMedicalDevices(input: Readonly<{
   q?: unknown; type?: unknown; year?: unknown; region?: unknown; company?: unknown;
   limit?: unknown; cursor?: unknown; signal?: AbortSignal;
@@ -465,28 +513,7 @@ export async function searchMedicalDevices(input: Readonly<{
     ? new Set([meta.aggregates.scopes.indexOf(selectedScope)])
     : new Set(meta.aggregates.scopes.map((item, index) => item.year === year && item.region === region && item.company !== null ? index : -1).filter((index) => index >= 0));
   assertSignal(input.signal);
-  const matches: SearchCandidate[] = [];
-  const raw = loadSearchBytes();
-  let position = 0;
-  let scanned = 0;
-  while (position < raw.length) {
-    const end = raw.indexOf(0x0a, position);
-    if (end < 0) throw new Error("Indice ricerca senza terminatore finale");
-    if ((scanned++ & 4095) === 0) {
-      await setImmediate();
-      assertSignal(input.signal);
-    }
-    const line = raw.toString("utf8", position, end);
-    position = end + 1;
-    if (!line.includes(folded)) continue;
-    const hit = validateSearchCandidate(JSON.parse(line));
-    if (hit.scopes.some((id) => id >= meta.aggregates.scopes.length)) throw new Error("Scope ricerca fuori indice");
-    if (type !== null && hit.type !== type) continue;
-    if (year !== null && hit.years[String(year)] === undefined) continue;
-    if (selectedScopeIds !== null && !hit.scopes.some((id) => selectedScopeIds.has(id))) continue;
-    if (hit.searchKey.includes(folded)) matches.push(hit);
-  }
-  if (scanned !== meta.search.records) throw new Error("Conteggio ricerca divergente");
+  const matches = await scanSearchCandidates(meta, folded, type, year, selectedScopeIds, input.signal);
   matches.sort((left, right) => {
     const leftScore = normalized(left.number) === folded ? 0 : left.searchKey.startsWith(folded) ? 1 : 2;
     const rightScore = normalized(right.number) === folded ? 0 : right.searchKey.startsWith(folded) ? 1 : 2;
