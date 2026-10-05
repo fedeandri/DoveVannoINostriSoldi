@@ -61,6 +61,7 @@ async function call(mod, fn, input) {
   return mod[fn](input);
 }
 
+const started = performance.now();
 const results = [];
 for (const group of corpus) {
   const mod = await import(pathToFileURL(resolve(group.modulePath)).href);
@@ -77,4 +78,7 @@ for (const group of corpus) {
 // Prove which side ran: the files process must never open dvns.sqlite, the sqlite process must have
 // opened it whenever it ran any case.
 const { sqliteDbOpened } = await import(pathToFileURL(resolve('src/lib/data/sqlite.ts')).href);
-writeFileSync(outPath, JSON.stringify({ sqliteOpened: sqliteDbOpened(), results }));
+// maxRSS is in kilobytes. Spec 2: the parent decides concurrency from these measurements.
+const maxRssMb = Math.round(process.resourceUsage().maxRSS / 1024);
+const elapsedS = Math.round((performance.now() - started) / 1000);   // the cases only, not module loading
+writeFileSync(outPath, JSON.stringify({ sqliteOpened: sqliteDbOpened(), maxRssMb, elapsedS, results }));
