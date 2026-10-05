@@ -4,9 +4,9 @@ export async function generateMetadata({ params }: { params: Promise<{ ref: stri
   return metadata({ params, searchParams: Promise.resolve({}) });
 }
 
-// All inputs are committed snapshots. A new deployment owns a new render cache.
-export const revalidate = false;
-export function generateStaticParams() { return []; }
+// dvns-app fork: rendered per request, never stored by Next. Self-hosted, Next's render cache is the
+// release directory on disk with no bound (one file per entity visited); Cloudflare caches the HTML.
+export const dynamic = "force-dynamic";
 
 export default async function SnapshotPage({ params }: { params: Promise<{ ref: string }> }) {
   const { ref } = await params;
