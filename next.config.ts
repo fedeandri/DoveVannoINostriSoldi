@@ -184,6 +184,10 @@ const contentSecurityPolicyReportOnly = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  // dvns-app fork: reuse a dynamic page's RSC payload for 30 s on in-app navigation (spec section 8).
+  experimental: {
+    staleTimes: { dynamic: 30 },
+  },
   allowedDevOrigins: ["localhost", "127.0.0.1"],
   async headers() {
     return [
