@@ -9,10 +9,10 @@ export type MedicalSearchFilter = {
 };
 
 /** The matched set of spec 11.1 as a WHERE clause over `medical_search s`. */
-function matchedSet(filter: MedicalSearchFilter): { sql: string; params: unknown[] } {
+function matchedSet(filter: MedicalSearchFilter, useIndex = true): { sql: string; params: unknown[] } {
   const parts: string[] = [];
   const params: unknown[] = [];
-  if (filter.folded.length >= 3) {
+  if (useIndex && filter.folded.length >= 3) {
     parts.push("s.position in (select rowid from medical_search_fts where medical_search_fts match ?)");
     params.push(ftsPhrase(filter.folded));
   }
@@ -42,21 +42,31 @@ export function sqliteMedicalSearchCount(filter: MedicalSearchFilter): number {
   return (sqliteDb().prepare(`select count(*) n from medical_search s where ${sql}`).get(...params) as { n: number }).n;
 }
 
-/** One page of matching lines, in upstream's order: its three tiers as one expression, then tail_rank. */
-export function sqliteMedicalSearchPage(filter: MedicalSearchFilter, start: number, size: number): string[] {
+/** Spec 12.5: one page and the matched count in one pass; `matched` is null when the page is empty. */
+export function sqliteMedicalSearchPageCounted(filter: MedicalSearchFilter, start: number, size: number):
+  { lines: string[]; matched: number | null } {
   const { sql, params } = matchedSet(filter);
-  const rows = sqliteDb().prepare(`select s.line from medical_search s where ${sql}
+  const rows = sqliteDb().prepare(`select s.line, count(*) over () n from medical_search s where ${sql}
       order by case when s.number_folded = ? then 0 when substr(s.search_key, 1, ?) = ? then 1 else 2 end, s.tail_rank
-      limit ? offset ?`).all(...params, filter.folded, filter.folded.length, filter.folded, size, start);
-  return (rows as Array<{ line: string }>).map((row) => row.line);
+      limit ? offset ?`).all(...params, filter.folded, filter.folded.length, filter.folded, size, start) as
+    Array<{ line: string; n: number }>;
+  return { lines: rows.map((row) => row.line), matched: rows.length === 0 ? null : rows[0].n };
 }
 
 /** Distinct types among matched rows whose raw number equals the raw trimmed query (requiresType). */
 export function sqliteMedicalExactNumberTypes(filter: MedicalSearchFilter, number: string): string[] {
-  const { sql, params } = matchedSet(filter);
-  const rows = sqliteDb().prepare(`select distinct s.type from medical_search s where ${sql} and s.number = ?`)
-    .all(...params, number);
+  // Spec 12.5: through the number index; the full-text clause can only narrow a set instr already defines.
+  const { sql, params } = matchedSet(filter, false);
+  const rows = sqliteDb().prepare(`select distinct s.type from medical_search s where s.number = ? and ${sql}`)
+    .all(number, ...params);
   return (rows as Array<{ type: string }>).map((row) => row.type);
+}
+
+/** Spec 12.1: the detail lines of a page's refs, from medical_detail. */
+export function sqliteMedicalDetailLines(refs: readonly string[]): Array<{ ref: string; line: string }> {
+  if (refs.length === 0) return [];
+  return sqliteDb().prepare(`select ref, line from medical_detail where ref in (${refs.map(() => "?").join(", ")})`)
+    .all(...refs) as Array<{ ref: string; line: string }>;
 }
 
 /** The decompressed bytes of one details.jsonl.gz or aggregates.json.gz block, as readBlock returns them. */

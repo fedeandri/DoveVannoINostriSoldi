@@ -1,6 +1,6 @@
 // Shared helpers for the dvns-app SQLite converter and parity harness.
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 
 export class InputError extends Error {
@@ -12,6 +12,23 @@ export class InputError extends Error {
 
 export function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+/** SHA-256 of a file read in chunks: dvns.sqlite is larger than the 2 GiB a single readFileSync can return. */
+export function sha256File(path) {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(4 * 1024 * 1024);
+  const descriptor = openSync(path, 'r');
+  try {
+    for (;;) {
+      const count = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      hash.update(buffer.subarray(0, count));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest('hex');
 }
 
 /** Read a file and check it against the size and SHA-256 its manifest records, as the files backend does. */

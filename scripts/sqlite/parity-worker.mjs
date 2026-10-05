@@ -53,8 +53,10 @@ async function call(mod, fn, input) {
     const meta = JSON.parse(readFileSync('src/data/generated/medical-device-spending-index/meta.json', 'utf8'));
     const folded = mod.normalized(input.q.trim());
     const filter = sha256Hex(canonicalJson({ company: null, q: folded, region: null, type: null, year: null }));
-    const cursor = Buffer.from(canonicalJson({ filter, next: 1_000_000, source: meta.sourceSpecSha256, v: 1 })).toString('base64url');
-    return mod.searchMedicalDevices({ q: input.q, cursor });
+    // input.next: 'end' is the match count itself (an empty last page); otherwise beyond it.
+    const next = input.next === 'end' ? (await mod.searchMedicalDevices({ q: input.q })).matched : 1_000_000;
+    const cursor = Buffer.from(canonicalJson({ filter, next, source: meta.sourceSpecSha256, v: 1 })).toString('base64url');
+    return mod.searchMedicalDevices({ q: input.q, cursor, ...(input.limit === undefined ? {} : { limit: input.limit }) });
   }
   return mod[fn](input);
 }

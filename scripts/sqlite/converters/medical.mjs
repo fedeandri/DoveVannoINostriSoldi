@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { InputError, gunzipExact, readVerified, sha256 } from '../lib.mjs';
-import { compareSearchTail, normalized, totalSpending, validateSearchCandidate } from '../../../src/lib/medical-device-spending.ts';
+import { compareSearchTail, normalized, parseDetailLine, totalSpending, validateSearchCandidate } from '../../../src/lib/medical-device-spending.ts';
 
 const ROOT = 'src/data/generated/medical-device-spending-index';
 export const name = 'medical';
@@ -69,6 +69,31 @@ export function convert(db, ctx) {
   // The decompressed blocks of details.jsonl.gz and aggregates.json.gz, keyed as readBlock reads them.
   db.exec('create table medical_block(file text not null, key text not null, raw blob not null, primary key (file, key)) without rowid');
   const insertBlock = db.prepare('insert into medical_block values (?, ?, ?)');
+  db.exec('create table medical_detail(ref text primary key, line text not null)');
+  const insertDetail = db.prepare('insert into medical_detail values (?, ?)');
+  // Spec 12.2: the checks loadDetails runs, plus the two a lookup by ref needs. Upstream finds a ref's
+  // block by index, meta.details.blocks[parseInt(ref.slice(3, 5), 16)].
+  const seenRefs = new Set();
+  const insertDetails = (raw, index, block, path) => {
+    const lines = raw.toString('utf8').trimEnd().split('\n').filter(Boolean);
+    let facts = 0;
+    for (const line of lines) {
+      let detail;
+      try { detail = parseDetailLine(line); } catch (error) {
+        throw new InputError(path, `block ${block.key}: ${error.message}`);
+      }
+      if (Number.parseInt(detail.ref.slice(3, 5), 16) !== index) {
+        throw new InputError(path, `block ${block.key}: ${detail.ref} belongs to another block`);
+      }
+      if (seenRefs.has(detail.ref)) throw new InputError(path, `block ${block.key}: duplicate ref ${detail.ref}`);
+      seenRefs.add(detail.ref);
+      facts += detail.facts.length;
+      insertDetail.run(detail.ref, line);
+    }
+    if (lines.length !== block.records || facts !== block.facts) {
+      throw new InputError(path, `block ${block.key}: ${lines.length} records and ${facts} facts, manifest says ${block.records} and ${block.facts}`);
+    }
+  };
   for (const [part, blocks] of [[meta.details, meta.details.blocks], [meta.aggregates, meta.aggregates.scopes]]) {
     const path = join(ROOT, part.path);
     let whole;
@@ -79,7 +104,9 @@ export function convert(db, ctx) {
       for (const block of blocks) {
         const bytes = whole.subarray(block.offset, block.offset + block.bytes);
         if (sha256(bytes) !== block.sha256) throw new InputError(path, `block ${block.key}: SHA-256 differs from the manifest`);
-        insertBlock.run(part.path, block.key, gunzipExact(bytes, block.rawBytes, `${path} block ${block.key}`));
+        const raw = gunzipExact(bytes, block.rawBytes, `${path} block ${block.key}`);
+        insertBlock.run(part.path, block.key, raw);
+        if (part === meta.details) insertDetails(raw, blocks.indexOf(block), block, path);
       }
     })();
   }

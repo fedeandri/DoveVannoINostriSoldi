@@ -7,7 +7,7 @@ import { setImmediate } from "node:timers/promises";
 import { gunzipSync } from "node:zlib";
 import { canonicalJson, sha256Hex } from "@/lib/integrated-source-contract";
 import { dataBackend } from "@/lib/data/sqlite";
-import { sqliteMedicalBlock, sqliteMedicalExactNumberTypes, sqliteMedicalSearchCount, sqliteMedicalSearchPage } from "@/lib/medical-device-spending.sqlite";
+import { sqliteMedicalBlock, sqliteMedicalDetailLines, sqliteMedicalExactNumberTypes, sqliteMedicalSearchCount, sqliteMedicalSearchPageCounted } from "@/lib/medical-device-spending.sqlite";
 
 const ROOT = "src/data/generated/medical-device-spending-index";
 const META_PATH = join(ROOT, "meta.json");
@@ -125,7 +125,7 @@ export type MedicalDeviceFact = Readonly<{
   joinStatus: "matched" | "not_found";
 }>;
 
-type Detail = Omit<MedicalDeviceSearchHit, "searchKey" | "scopes" | "years"> & Readonly<{
+export type Detail = Omit<MedicalDeviceSearchHit, "searchKey" | "scopes" | "years"> & Readonly<{
   facts: readonly MedicalDeviceFact[];
 }>;
 
@@ -527,11 +527,16 @@ export async function searchMedicalDevices(input: Readonly<{
     await setImmediate();
     assertSignal(input.signal);
     const sqlFilter = { folded, type, year, scopeIds: selectedScopeIds === null ? null : [...selectedScopeIds] };
-    matchedCount = sqliteMedicalSearchCount(sqlFilter);
+    // Spec 12.5: same error precedence as upstream (cursor beyond the end, then limit), one index pass.
     start = pageStart(input.cursor, hash, meta);
+    let sizeError: unknown = null;
+    try { size = limit(input.limit); } catch (error) { sizeError = error; size = 0; }
+    let page: { lines: string[]; matched: number | null } = { lines: [], matched: null };
+    if (sizeError === null) page = sqliteMedicalSearchPageCounted(sqlFilter, start, size);
+    matchedCount = page.matched ?? sqliteMedicalSearchCount(sqlFilter);
     if (start > matchedCount) throw new MedicalDeviceQueryError("cursor oltre i risultati disponibili.");
-    size = limit(input.limit);
-    candidates = sqliteMedicalSearchPage(sqlFilter, start, size).map((line) => validateSearchCandidate(JSON.parse(line)));
+    if (sizeError !== null) throw sizeError;
+    candidates = page.lines.map((line) => validateSearchCandidate(JSON.parse(line)));
     exactNumberTypes = new Set(sqliteMedicalExactNumberTypes(sqlFilter, query));
     await setImmediate();
     assertSignal(input.signal);
@@ -552,8 +557,16 @@ export async function searchMedicalDevices(input: Readonly<{
     exactNumberTypes = new Set(matches.filter((hit) => hit.number === query).map((hit) => hit.type));
   }
   const detailsByRef = new Map<string, Detail>();
-  for (const prefix of new Set(candidates.map((candidate) => candidate.ref.slice(3, 5)))) {
-    for (const detail of loadDetails(meta, prefix)) detailsByRef.set(detail.ref, detail);
+  if (dataBackend() === "sqlite") {
+    // dvns-app fork (spec 12.1): only the page's own detail lines, validated as loadDetails validates them.
+    for (const { line } of sqliteMedicalDetailLines(candidates.map((candidate) => candidate.ref))) {
+      const detail = parseDetailLine(line);
+      detailsByRef.set(detail.ref, detail);
+    }
+  } else {
+    for (const prefix of new Set(candidates.map((candidate) => candidate.ref.slice(3, 5)))) {
+      for (const detail of loadDetails(meta, prefix)) detailsByRef.set(detail.ref, detail);
+    }
   }
   const hits = candidates.map((candidate) => {
     const detail = detailsByRef.get(candidate.ref);
@@ -813,21 +826,24 @@ function validateFact(value: unknown): MedicalDeviceFact {
     spending: money(row.spending, "fact.spending"), joinStatus: row.joinStatus as "matched" | "not_found" };
 }
 
+/** dvns-app fork (spec 12.1): upstream's per-line detail validation, shared by loadDetails, the SQLite read and the converter. */
+export function parseDetailLine(line: string): Detail {
+  const value = record(JSON.parse(line), "detail");
+  const base = validateSearchCandidate({ ...value, searchKey: "", scopes: [], years: {} });
+  const role = value.role === null ? null : value.role === "fabbricante" || value.role === "assemblatore" ? value.role : (() => { throw new Error("Ruolo non valido"); })();
+  return { schemaVersion: 1, ref: base.ref, type: base.type, number: base.number,
+    registryRecordId: text(value.registryRecordId, "registryRecordId", 64, true), name: text(value.name, "name", 2000, true),
+    catalog: text(value.catalog, "catalog", 1000, true), manufacturer: text(value.manufacturer, "manufacturer", 1000, true), role,
+    classification: text(value.classification, "classification", 100, true), classificationLabel: text(value.classificationLabel, "classificationLabel", 2000, true),
+    facts: Array.isArray(value.facts) ? value.facts.map(validateFact) : (() => { throw new Error("Fatti dettaglio non validi"); })() } satisfies Detail;
+}
+
 function loadDetails(meta: Meta, prefix: string): readonly Detail[] {
   const cached = detailCache.get(prefix);
   if (cached) return cached;
   const block = meta.details.blocks[Number.parseInt(prefix, 16)];
   const raw = readBlock(meta.details.path, meta.details.bytes, block);
-  const rows = raw.toString("utf8").trimEnd().split("\n").filter(Boolean).map((line) => {
-    const value = record(JSON.parse(line), "detail");
-    const base = validateSearchCandidate({ ...value, searchKey: "", scopes: [], years: {} });
-    const role = value.role === null ? null : value.role === "fabbricante" || value.role === "assemblatore" ? value.role : (() => { throw new Error("Ruolo non valido"); })();
-    return { schemaVersion: 1, ref: base.ref, type: base.type, number: base.number,
-      registryRecordId: text(value.registryRecordId, "registryRecordId", 64, true), name: text(value.name, "name", 2000, true),
-      catalog: text(value.catalog, "catalog", 1000, true), manufacturer: text(value.manufacturer, "manufacturer", 1000, true), role,
-      classification: text(value.classification, "classification", 100, true), classificationLabel: text(value.classificationLabel, "classificationLabel", 2000, true),
-      facts: Array.isArray(value.facts) ? value.facts.map(validateFact) : (() => { throw new Error("Fatti dettaglio non validi"); })() } satisfies Detail;
-  });
+  const rows = raw.toString("utf8").trimEnd().split("\n").filter(Boolean).map(parseDetailLine);
   if (rows.length !== block.records || rows.reduce((sum, row) => sum + row.facts.length, 0) !== block.facts) {
     throw new Error("Conteggio del blocco di dettaglio divergente");
   }

@@ -13,8 +13,8 @@ if (!process.execArgv.includes('--experimental-strip-types')) {
 }
 await import('../ci/register-source-alias.mjs');
 const { default: Database } = await import('better-sqlite3');
-const { existsSync, readFileSync, renameSync, rmSync, writeFileSync } = await import('node:fs');
-const { InputError, sha256 } = await import('./lib.mjs');
+const { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } = await import('node:fs');
+const { InputError, sha256File } = await import('./lib.mjs');
 const { CONVERTERS } = await import('./converters/index.mjs');
 
 const CONVERTER_VERSION = '1';
@@ -63,5 +63,5 @@ try {
 }
 db.close();
 renameSync(TMP, OUT);
-writeFileSync(`${OUT}.sha256`, `${sha256(readFileSync(OUT))}\n`);
-console.log(`dvns.sqlite ok (${(readFileSync(OUT).length / 1e6).toFixed(1)} MB)`);
+writeFileSync(`${OUT}.sha256`, `${sha256File(OUT)}\n`);
+console.log(`dvns.sqlite ok (${(statSync(OUT).size / 1e6).toFixed(1)} MB)`);

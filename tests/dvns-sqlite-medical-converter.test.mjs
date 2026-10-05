@@ -70,3 +70,56 @@ test('medical converter refuses a search line upstream would reject', () => {
   assert.match(run.stderr, /input file failed verification: .*search\.jsonl\.gz: line 1/);
   rmSync(dir, { recursive: true });
 });
+
+function rewriteDetailsBlock(dir, index, edit) {
+  // Rewrites one details block and patches meta.json so the file and block hashes still verify.
+  const metaPath = join(dir, INDEX, 'meta.json');
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+  const path = join(dir, INDEX, meta.details.path);
+  const whole = readFileSync(path);
+  const blocks = meta.details.blocks;
+  const pieces = blocks.map((b) => whole.subarray(b.offset, b.offset + b.bytes));
+  const raw = gunzipSync(pieces[index]).toString('utf8');
+  const newRaw = Buffer.from(edit(raw, meta));
+  pieces[index] = gzipSync(newRaw);
+  let offset = 0;
+  blocks.forEach((b, i) => {
+    b.offset = offset; b.bytes = pieces[i].length; offset += b.bytes;
+    if (i === index) { b.rawBytes = newRaw.length; b.sha256 = createHash('sha256').update(pieces[i]).digest('hex'); }
+  });
+  const file = Buffer.concat(pieces);
+  writeFileSync(path, file);
+  meta.details.bytes = file.length;
+  if (meta.details.sha256 !== undefined) meta.details.sha256 = createHash('sha256').update(file).digest('hex');
+  writeFileSync(metaPath, JSON.stringify(meta));
+}
+
+test('medical converter refuses a detail stored in the wrong block', () => {
+  const dir = release();
+  rewriteDetailsBlock(dir, 3, (raw) => {
+    const lines = raw.trimEnd().split('\n');
+    const first = JSON.parse(lines[0]);
+    first.ref = `${first.ref.slice(0, 3)}04${first.ref.slice(5)}`;   // names block 4, stored in block 3
+    lines[0] = JSON.stringify(first);
+    return `${lines.join('\n')}\n`;
+  });
+  const run = convert(dir);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /block 03: .* belongs to another block/);
+  rmSync(dir, { recursive: true });
+});
+
+test('medical converter refuses a details block whose fact count differs from meta.json', () => {
+  const dir = release();
+  rewriteDetailsBlock(dir, 5, (raw) => {
+    const lines = raw.trimEnd().split('\n');
+    const first = JSON.parse(lines[0]);
+    first.facts = first.facts.slice(1);
+    lines[0] = JSON.stringify(first);
+    return `${lines.join('\n')}\n`;
+  });
+  const run = convert(dir);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /block 05: .* facts, manifest says/);
+  rmSync(dir, { recursive: true });
+});

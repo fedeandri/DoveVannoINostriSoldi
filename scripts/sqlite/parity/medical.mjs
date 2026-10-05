@@ -91,6 +91,9 @@ export function buildCases(db, random) {
   for (const { number } of bothTypes) add('searchMedicalDevices', { q: number });
   add('searchMedicalDevices', { q: 'PROTESI', cursor: 'not-a-cursor!!' });
   for (let i = 0; i < 5; i += 1) add('cursorBeyond', { q: substring(3) });
+  // Spec 12.5: a cursor beyond the end with an invalid limit (the cursor error wins), and a cursor at the end.
+  add('cursorBeyond', { q: 'PROTESI', limit: 'abc' });
+  add('cursorBeyond', { q: 'PROTESI', next: 'end' });
   for (const limit of ['0', '101', 'abc']) add('searchMedicalDevices', { q: 'PROTESI', limit });
   return cases;
 }
