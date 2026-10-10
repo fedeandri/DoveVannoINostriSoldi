@@ -1,3 +1,37 @@
+> [!NOTE]
+> **Questo è un fork sperimentale, non il progetto ufficiale.** Il progetto originale è
+> [Italian-Builders-Org/DoveVannoINostriSoldi](https://github.com/Italian-Builders-Org/DoveVannoINostriSoldi)
+> e il sito ufficiale è [dovevannoinostrisoldi.com](https://www.dovevannoinostrisoldi.com).
+>
+> Il fork è nato da un esperimento personale, non collegato ai maintainer: far girare l'app su un piccolo VPS
+> Hetzner dietro Cloudflare invece che su Vercel (circa 40-50 dollari al mese, secondo il proprietario del
+> progetto), misurando ogni passo. La copia di test `dvnstest.com` è stata spenta il 10 ottobre 2026 e ora
+> rimanda qui.
+>
+> **Cosa cambia rispetto all'originale** (branch `vps-sqlite`, 9 commit:
+> [confronto](https://github.com/Italian-Builders-Org/DoveVannoINostriSoldi/compare/main...fedeandri:DoveVannoINostriSoldi:vps-sqlite)):
+>
+> - Un backend dati SQLite opzionale (`DVNS_DATA_BACKEND=sqlite`) per la ricerca sui dispositivi medici e
+>   sugli operatori economici ANAC: ricerca full-text, ordinamento e paginazione fatti in SQL. Un harness di
+>   parità (`scripts/sqlite/parity.mjs`) verifica che i due backend restituiscano risultati identici.
+> - Le pagine snapshot vengono generate a ogni richiesta invece di riempire la cache su disco di Next.
+> - I payload RSC dinamici restano in cache 30 secondi durante la navigazione nell'app.
+>
+> **Risultati misurati** (un solo server, singole misure):
+>
+> | Misura | Prima | Dopo |
+> |---|---|---|
+> | Ricerca dispositivi medici (`q=protesi`, processo già avviato) | 2,095 s | 0,084-0,095 s |
+> | Ricerca operatori (`q=costruzioni`, processo appena riavviato) | 1,662 s | 0,103-0,116 s |
+> | Pagina in cache su Cloudflare, attesa mediana del server | nessuna pagina in cache | 0,063-0,079 s |
+> | Memoria del processo dopo il primo giro di 22 pagine | 1.448 MB | 1.141-1.184 MB |
+>
+> La stessa release ha girato anche su un Hetzner cx23 (2 vCPU, 4 GB di RAM) con un picco di 1.224 MB e
+> senza usare lo swap; lì le risposte dal server sono circa 2 volte più lente, mentre quelle servite dalla
+> cache di Cloudflare restano quasi uguali (0,080 s contro 0,074 s).
+>
+> Licenza invariata: AGPL-3.0-or-later, come l'originale.
+
 # DoveVannoINostriSoldi
 
 Progetto civico open source per capire, con dati ufficiali, come vengono usati i soldi pubblici italiani.
